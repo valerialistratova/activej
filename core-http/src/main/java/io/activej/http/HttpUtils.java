@@ -16,8 +16,12 @@
 
 package io.activej.http;
 
+import io.activej.bytebuf.ByteBuf;
 import io.activej.common.exception.parse.ParseException;
 import io.activej.common.exception.parse.UnknownFormatException;
+import io.activej.csp.ChannelSupplier;
+import io.activej.csp.dsl.ChannelSupplierTransformer;
+import io.activej.promise.Promise;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.UnsupportedEncodingException;
@@ -25,10 +29,16 @@ import java.net.InetAddress;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.net.UnknownHostException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
 import java.util.Map;
+import java.util.function.Function;
 
 import static io.activej.bytebuf.ByteBufStrings.*;
-import static io.activej.http.HttpHeaders.HOST;
+import static io.activej.http.HttpHeaders.*;
+import static io.activej.http.WebSocketConstants.MAGIC_STRING;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
  * Util for working with {@link HttpRequest}
@@ -270,7 +280,8 @@ public final class HttpUtils {
 		String query = request.getQuery();
 		String fragment = request.getFragment();
 		StringBuilder fullUriBuilder = new StringBuilder(builderCapacity)
-				.append(request.isHttps() ? "https://" : "http://")
+				.append(request.getProtocol().lowercase())
+				.append("://")
 				.append(host)
 				.append(request.getPath());
 		if (!query.isEmpty()) {
@@ -337,5 +348,52 @@ public final class HttpUtils {
 			default:
 				return code + ". Unknown HTTP code, returned from an error";
 		}
+	}
+
+	static HttpResponse mapWebSocketResponse(HttpResponse response,
+			ChannelSupplierTransformer<ByteBuf, ChannelSupplier<ByteBuf>> transformer,
+			Function<Promise<Void>, Promise<Void>> eosFn) {
+		HttpResponse mappedRes = HttpResponse.ofCode(101)
+				.withHeader(UPGRADE, "Websocket")
+				.withHeader(CONNECTION, "Upgrade");
+		for (Map.Entry<String, HttpCookie> cookieEntry : response.getCookies().entrySet()) {
+			mappedRes.addCookie(HttpCookie.of(cookieEntry.getKey(), cookieEntry.getValue().getValue()));
+		}
+		for (Map.Entry<HttpHeader, HttpHeaderValue> headerEntry : response.getHeaders()) {
+			mappedRes.addHeader(headerEntry.getKey(), headerEntry.getValue());
+		}
+		ChannelSupplier<ByteBuf> bodyStream = doGetBodyStream(response);
+		mappedRes.setBodyStream(bodyStream.transformWith(transformer)
+				.withEndOfStream(eosFn));
+		return mappedRes;
+	}
+
+	static ChannelSupplier<ByteBuf> doGetBodyStream(HttpMessage response) {
+		return response.bodyStream == null && response.body == null ?
+				ChannelSupplier.of() :
+				response.getBodyStream();
+	}
+
+	static boolean isHeaderMissing(HttpMessage message, HttpHeader header, String value) {
+		String headerValue = message.getHeader(header);
+		if (headerValue != null) {
+			for (String val : headerValue.split(",")) {
+				if (value.equalsIgnoreCase(val.trim())) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	static String getWebSocketAnswer(String key) {
+		String answer;
+		try {
+			answer = Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-1")
+					.digest((key + MAGIC_STRING).getBytes(UTF_8)));
+		} catch (NoSuchAlgorithmException e) {
+			throw new RuntimeException(e);
+		}
+		return answer;
 	}
 }

@@ -34,10 +34,12 @@ import java.util.List;
 import java.util.Map;
 
 import static io.activej.bytebuf.ByteBufStrings.*;
+import static io.activej.common.Checks.checkArgument;
 import static io.activej.common.Checks.checkState;
 import static io.activej.common.Utils.nullToEmpty;
 import static io.activej.http.HttpHeaders.*;
 import static io.activej.http.HttpMethod.*;
+import static io.activej.http.Protocol.*;
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonList;
 
@@ -74,6 +76,7 @@ public final class HttpRequest extends HttpMessage implements WithInitializer<Ht
 	public static HttpRequest of(@NotNull HttpMethod method, @NotNull String url) {
 		HttpRequest request = new HttpRequest(method, null);
 		request.setUrl(url);
+		if (CHECK) checkArgument(request.getProtocol(), protocol -> protocol == HTTP || protocol == HTTPS, "Incorrect protocol");
 		return request;
 	}
 
@@ -90,6 +93,14 @@ public final class HttpRequest extends HttpMessage implements WithInitializer<Ht
 	@NotNull
 	public static HttpRequest put(@NotNull String url) {
 		return HttpRequest.of(PUT, url);
+	}
+
+	@NotNull
+	public static HttpRequest webSocket(@NotNull String url) {
+		HttpRequest request = new HttpRequest(GET, null);
+		request.setUrl(url);
+		if (CHECK) checkArgument(request.getProtocol(), protocol -> protocol == WS || protocol == WSS, "Incorrect protocol");
+		return request;
 	}
 
 	@NotNull
@@ -181,8 +192,8 @@ public final class HttpRequest extends HttpMessage implements WithInitializer<Ht
 		remoteAddress = inetAddress;
 	}
 
-	public boolean isHttps() {
-		return url.isHttps();
+	public Protocol getProtocol() {
+		return url.getProtocol();
 	}
 
 	@Override

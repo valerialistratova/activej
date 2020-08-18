@@ -32,11 +32,19 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.net.InetSocketAddress;
+import java.util.Base64;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static io.activej.bytebuf.ByteBufStrings.SP;
 import static io.activej.bytebuf.ByteBufStrings.decodePositiveInt;
-import static io.activej.http.HttpHeaders.CONNECTION;
+import static io.activej.csp.ChannelSuppliers.concat;
+import static io.activej.http.HttpHeaders.*;
 import static io.activej.http.HttpMessage.MUST_LOAD_BODY;
+import static io.activej.http.HttpUtils.*;
+import static io.activej.http.Protocol.WS;
+import static io.activej.http.Protocol.WSS;
+import static io.activej.http.WebSocketConstants.HANDSHAKE_FAILED;
+import static io.activej.http.WebSocketConstants.REGULAR_CLOSE;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
 /**
@@ -176,7 +184,21 @@ final class HttpClientConnection extends AbstractHttpConnection {
 		//noinspection ConstantConditions
 		response.flags |= MUST_LOAD_BODY;
 		response.body = body;
-		response.bodyStream = bodySupplier;
+		if (isWebSocket() && response.getCode() == 101) {
+			response.bodyStream = concat(ChannelSupplier.of(readQueue.takeRemaining()), ChannelSupplier.ofSocket(socket))
+					.withEndOfStream(eos -> eos
+							.whenResult(this::onBodyReceived)
+							.whenException(e -> {
+								if (e instanceof WebSocketException) {
+									onBodyReceived();
+								} else {
+									closeWithError(e);
+								}
+							}));
+			flags |= BODY_RECEIVED;
+		} else {
+			response.bodyStream = bodySupplier;
+		}
 		if (inspector != null) inspector.onHttpResponse(this, response);
 
 		SettablePromise<HttpResponse> promise = this.promise;
@@ -188,7 +210,7 @@ final class HttpClientConnection extends AbstractHttpConnection {
 	@Override
 	protected void onBodyReceived() {
 		assert !isClosed();
-		flags |= BODY_RECEIVED;
+		flags ^= BODY_RECEIVED;
 		if (response != null && (flags & BODY_SENT) != 0) {
 			onHttpMessageComplete();
 		}
@@ -219,6 +241,77 @@ final class HttpClientConnection extends AbstractHttpConnection {
 				.streamTo(buffer.getConsumer())
 				.both(inflaterFinished)
 				.whenComplete(afterProcessCb);
+	}
+
+	private @NotNull Promise<HttpResponse> sendWebSocketRequest(HttpRequest request) {
+		flags |= WEB_SOCKET;
+		flags |= UPGRADE;
+		request.addHeader(CONNECTION, CONNECTION_UPGRADE_HEADER);
+		request.addHeader(HttpHeaders.UPGRADE, UPGRADE_WEBSOCKET_HEADER);
+		request.addHeader(SEC_WEBSOCKET_VERSION, WEB_SOCKET_VERSION);
+
+		byte[] key = new byte[16];
+		ThreadLocalRandom.current().nextBytes(key);
+		byte[] encodedKey = Base64.getEncoder().encode(key);
+		request.addHeader(SEC_WEBSOCKET_KEY, encodedKey);
+
+		WebSocketEncoder encoder = WebSocketEncoder.create(true);
+		WebSocketDecoder decoder = WebSocketDecoder.create(encoder, false);
+		SettablePromise<Void> successfulUpgrade = new SettablePromise<>();
+
+		ChannelSupplier<ByteBuf> rawOutput = doGetBodyStream(request);
+		request.setBodyStream(ChannelSupplier.ofPromise(successfulUpgrade
+				.map($ -> rawOutput.transformWith(encoder)
+						.withEndOfStream(eos -> eos.then(() -> decoder.getCloseReceivedPromise().toVoid())))));
+
+		writeHttpMessageAsStream(request);
+
+		request.recycle();
+		if (!isClosed()) {
+			readHttpResponse();
+		}
+		assert promise != null;
+		return promise
+				.then(res -> {
+					if (res.getCode() != 101 ||
+							isHeaderMissing(res, HttpHeaders.UPGRADE, "websocket") ||
+							isHeaderMissing(res, CONNECTION, "upgrade") ||
+							isAnswerInvalid(res, encodedKey)) {
+						close();
+						return Promise.ofException(HANDSHAKE_FAILED);
+					}
+
+					encoder.getCloseSentPromise().then(decoder::getCloseReceivedPromise)
+							.whenException(rawOutput::closeEx)
+							.whenResult(rawOutput::closeEx);
+
+					return Promise.of(mapWebSocketResponse(res, decoder, eos -> eos
+							.whenResult(() -> encoder.closeEx(REGULAR_CLOSE))
+							.whenException(encoder::closeEx)));
+				})
+				.whenResult(() -> successfulUpgrade.set(null))
+				.whenException(rawOutput::closeEx);
+	}
+
+	private void readHttpResponse() {
+		/*
+			as per RFC 7230, section 3.3.3,
+			if no Content-Length header is set, client should read body until a server closes the connection
+		*/
+		contentLength = UNSET_CONTENT_LENGTH;
+		if (readQueue.isEmpty()) {
+			tryReadHttpMessage();
+		} else {
+			eventloop.post(() -> {
+				if (isClosed()) return;
+				tryReadHttpMessage();
+			});
+		}
+	}
+
+	private boolean isAnswerInvalid(HttpResponse response, byte[] key) {
+		String header = response.getHeader(SEC_WEBSOCKET_ACCEPT);
+		return header == null || !getWebSocketAnswer(new String(key)).equals(header.trim());
 	}
 
 	private void onHttpMessageComplete() {
@@ -259,6 +352,9 @@ final class HttpClientConnection extends AbstractHttpConnection {
 		this.promise = promise;
 		(pool = client.poolReadWrite).addLastNode(this);
 		poolTimestamp = eventloop.currentTimeMillis();
+		if (request.getProtocol() == WS || request.getProtocol() == WSS) {
+			return sendWebSocketRequest(request);
+		}
 		HttpHeaderValue connectionHeader = CONNECTION_KEEP_ALIVE_HEADER;
 		if (client.keepAliveTimeoutMillis == 0 ||
 				client.maxKeepAliveRequests != 0 && ++numberOfKeepAliveRequests >= client.maxKeepAliveRequests) {
@@ -273,19 +369,7 @@ final class HttpClientConnection extends AbstractHttpConnection {
 		}
 		request.recycle();
 		if (!isClosed()) {
-			/*
-				as per RFC 7230, section 3.3.3,
-				if no Content-Length header is set, client should read body until a server closes the connection
-			*/
-			contentLength = UNSET_CONTENT_LENGTH;
-			if (readQueue.isEmpty()) {
-				tryReadHttpMessage();
-			} else {
-				eventloop.post(() -> {
-					if (isClosed()) return;
-					tryReadHttpMessage();
-				});
-			}
+			readHttpResponse();
 		}
 		return promise;
 	}

@@ -50,6 +50,7 @@ public final class HttpResponse extends HttpMessage implements Promisable<HttpRe
 	private static final byte[] HTTP11_BYTES = encodeAscii("HTTP/1.1 ");
 	private static final byte[] CODE_ERROR_BYTES = encodeAscii(" Error");
 	private static final byte[] CODE_OK_BYTES = encodeAscii(" OK");
+	private static final byte[] CODE_101_BYTES = encodeAscii("HTTP/1.1 101 Switching Protocols");
 	private static final byte[] CODE_200_BYTES = encodeAscii("HTTP/1.1 200 OK");
 	private static final byte[] CODE_201_BYTES = encodeAscii("HTTP/1.1 201 Created");
 	private static final byte[] CODE_206_BYTES = encodeAscii("HTTP/1.1 206 Partial Content");
@@ -323,6 +324,9 @@ public final class HttpResponse extends HttpMessage implements Promisable<HttpRe
 	private static void writeCodeMessage(@NotNull ByteBuf buf, int code) {
 		byte[] result;
 		switch (code) {
+			case 101:
+				result = CODE_101_BYTES;
+				break;
 			case 200:
 				result = CODE_200_BYTES;
 				break;

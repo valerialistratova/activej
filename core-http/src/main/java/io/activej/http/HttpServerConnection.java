@@ -35,6 +35,7 @@ import java.util.Arrays;
 
 import static io.activej.bytebuf.ByteBufStrings.*;
 import static io.activej.common.Checks.checkState;
+import static io.activej.csp.ChannelSuppliers.concat;
 import static io.activej.eventloop.util.RunnableWithContext.wrapContext;
 import static io.activej.http.HttpHeaders.CONNECTION;
 import static io.activej.http.HttpMessage.MUST_LOAD_BODY;
@@ -221,11 +222,13 @@ final class HttpServerConnection extends AbstractHttpConnection {
 	}
 
 	private void writeHttpResponse(HttpResponse httpResponse) {
-		HttpHeaderValue connectionHeader = (flags & KEEP_ALIVE) != 0 ? CONNECTION_KEEP_ALIVE_HEADER : CONNECTION_CLOSE_HEADER;
-		if (server.maxKeepAliveRequests != 0 && ++numberOfKeepAliveRequests >= server.maxKeepAliveRequests) {
-			connectionHeader = CONNECTION_CLOSE_HEADER;
+		if (httpResponse.getHeader(CONNECTION) == null) {
+			HttpHeaderValue connectionHeader = (flags & KEEP_ALIVE) != 0 ? CONNECTION_KEEP_ALIVE_HEADER : CONNECTION_CLOSE_HEADER;
+			if (server.maxKeepAliveRequests != 0 && ++numberOfKeepAliveRequests >= server.maxKeepAliveRequests) {
+				connectionHeader = CONNECTION_CLOSE_HEADER;
+			}
+			httpResponse.addHeader(CONNECTION, connectionHeader);
 		}
-		httpResponse.addHeader(CONNECTION, connectionHeader);
 		ByteBuf buf = renderHttpMessage(httpResponse);
 		if (buf != null) {
 			if ((flags & KEEP_ALIVE) != 0) {
@@ -245,8 +248,22 @@ final class HttpServerConnection extends AbstractHttpConnection {
 
 		//noinspection ConstantConditions
 		request.flags |= MUST_LOAD_BODY;
-		request.body = body;
-		request.bodyStream = bodySupplier;
+		if (isWebSocket()) {
+			request.bodyStream = concat(ChannelSupplier.of(readQueue.takeRemaining()), ChannelSupplier.ofSocket(socket))
+					.withEndOfStream(eos -> eos
+							.whenResult(this::onBodyReceived)
+							.whenException(e -> {
+								if (e instanceof WebSocketException) {
+									onBodyReceived();
+								} else {
+									closeWithError(e);
+								}
+							}));
+			flags |= BODY_RECEIVED;
+		} else {
+			request.body = body;
+			request.bodyStream = bodySupplier;
+		}
 		request.setRemoteAddress(remoteAddress);
 
 		if (inspector != null) {
@@ -271,17 +288,16 @@ final class HttpServerConnection extends AbstractHttpConnection {
 				}
 				return;
 			}
+			switchPool(server.poolReadWrite);
 			if (e == null) {
 				if (inspector != null) {
 					inspector.onHttpResponse(request, response);
 				}
-				switchPool(server.poolReadWrite);
 				writeHttpResponse(response);
 			} else {
 				if (inspector != null) {
 					inspector.onServletException(request, e);
 				}
-				switchPool(server.poolReadWrite);
 				writeException(e);
 			}
 
@@ -292,7 +308,7 @@ final class HttpServerConnection extends AbstractHttpConnection {
 	@Override
 	protected void onBodyReceived() {
 		assert !isClosed();
-		flags |= BODY_RECEIVED;
+		flags ^= BODY_RECEIVED;
 		if ((flags & BODY_SENT) != 0 && pool != server.poolServing) {
 			onHttpMessageComplete();
 		}
