@@ -49,7 +49,7 @@ public final class WebSocketIntegrationTest {
 	@Test
 	@Ignore("Takes long time")
 	public void binaryDataLarge() {
-		// edgecases
+		// edge cases
 		doTest(randomBytes(65535));
 		doTest(randomBytes(65536));
 		doTest(randomBytes(65537));

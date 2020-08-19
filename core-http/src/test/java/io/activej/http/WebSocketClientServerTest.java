@@ -9,7 +9,6 @@ import io.activej.csp.ChannelSupplier;
 import io.activej.eventloop.Eventloop;
 import io.activej.promise.Promise;
 import io.activej.promise.Promises;
-import io.activej.promise.SettablePromise;
 import io.activej.test.rules.ActivePromisesRule;
 import io.activej.test.rules.ByteBufRule;
 import io.activej.test.rules.EventloopRule;
@@ -137,7 +136,7 @@ public final class WebSocketClientServerTest {
 
 		startSecureTestServer(request -> {
 			request.getBodyStream().streamTo(ChannelConsumer.ofConsumer(result::add));
-			return HttpResponse.ok200().withBodyStream(ChannelSupplier.of(SettablePromise::new));
+			return HttpResponse.ok200();
 		});
 
 		await(AsyncHttpClient.create(Eventloop.getCurrentEventloop())
@@ -165,8 +164,7 @@ public final class WebSocketClientServerTest {
 
 		await(AsyncHttpClient.create(Eventloop.getCurrentEventloop())
 				.withSslEnabled(createTestSslContext(), executor)
-				.request(HttpRequest.webSocket("wss://127.0.0.1:" + PORT)
-						.withBodyStream(ChannelSupplier.of(SettablePromise::new)))
+				.request(HttpRequest.webSocket("wss://127.0.0.1:" + PORT))
 				.then(response -> response.getBodyStream().streamTo(ChannelConsumer.ofConsumer(result::add))));
 
 		assertEquals(inputData, result.takeRemaining().asString(UTF_8));

@@ -256,11 +256,6 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 
 	private void onCloseReceived(WebSocketException e) {
 		closeReceivedPromise.trySet(e);
-		// Ignore any data after close
-		input.parseStream(queue -> {
-			queue.takeRemaining().recycle();
-			return null;
-		}).get();
 	}
 
 	@Override

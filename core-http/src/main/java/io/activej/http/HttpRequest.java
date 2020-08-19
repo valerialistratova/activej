@@ -99,7 +99,15 @@ public final class HttpRequest extends HttpMessage implements WithInitializer<Ht
 	public static HttpRequest webSocket(@NotNull String url) {
 		HttpRequest request = new HttpRequest(GET, null);
 		request.setUrl(url);
-		if (CHECK) checkArgument(request.getProtocol(), protocol -> protocol == WS || protocol == WSS, "Incorrect protocol");
+		if (CHECK) checkArgument(request.getProtocol(), protocol -> protocol == WS || protocol == WSS,
+				"Protocol must be either 'ws://' or 'wss://'");
+		return request;
+	}
+
+	@NotNull
+	public static HttpRequest webSocketText(@NotNull String url) {
+		HttpRequest request = webSocket(url);
+		request.flags |= WS_DATA_TEXT;
 		return request;
 	}
 

@@ -163,6 +163,14 @@ public abstract class AbstractHttpConnection {
 		return (flags & WEB_SOCKET) != 0 && (flags & UPGRADE) != 0;
 	}
 
+	protected void closeWebSocketConnection(Throwable e) {
+		if (e instanceof WebSocketException) {
+			close();
+		} else {
+			closeWithError(e);
+		}
+	}
+
 	public final void close() {
 		if (isClosed()) return;
 		flags |= CLOSED;

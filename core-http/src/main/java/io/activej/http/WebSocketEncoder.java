@@ -25,6 +25,7 @@ import io.activej.csp.ChannelOutput;
 import io.activej.csp.ChannelSupplier;
 import io.activej.csp.dsl.WithChannelTransformer;
 import io.activej.csp.process.AbstractCommunicatingProcess;
+import io.activej.http.WebSocketConstants.OpCode;
 import io.activej.promise.Promise;
 import io.activej.promise.SettablePromise;
 import org.jetbrains.annotations.Nullable;
@@ -47,6 +48,7 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 
 	@Nullable
 	private Promise<Void> pendingPromise;
+	private OpCode payloadOpCode = OP_BINARY;
 	private boolean closing;
 
 	// region creators
@@ -78,6 +80,10 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 			if (this.input != null && this.output != null) startProcess();
 		};
 	}
+
+	public void useTextEncoding(boolean use) {
+		this.payloadOpCode = use ? OP_TEXT : OP_BINARY;
+	}
 	// endregion
 
 	@Override
@@ -89,13 +95,13 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 	@Override
 	protected void doProcess() {
 		input.filter(ByteBuf::canRead)
-				.streamTo(ChannelConsumer.of(buf -> doAccept(encodeBuf(buf))))
-				.then(() -> sendCloseFrame(null))
+				.streamTo(ChannelConsumer.of(buf -> doAccept(encodeData(buf))))
+				.then(() -> sendCloseFrame(REGULAR_CLOSE))
 				.whenComplete(($, e) -> input.closeEx(e == null ? REGULAR_CLOSE : e))
 				.whenResult(this::completeProcess);
 	}
 
-	private ByteBuf doEncode(ByteBuf buf, WebSocketConstants.OpCode opCode) {
+	private ByteBuf doEncode(ByteBuf buf, OpCode opCode) {
 		int bufSize = buf.readRemaining();
 		int lenSize = bufSize < 126 ? 1 : bufSize < 65536 ? 3 : 9;
 
@@ -125,25 +131,25 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 		return framedBuf;
 	}
 
-	private ByteBuf encodeBuf(ByteBuf buf) {
-		return doEncode(buf, OP_TEXT);
+	private ByteBuf encodeData(ByteBuf buf) {
+		return doEncode(buf, payloadOpCode);
 	}
 
 	private ByteBuf encodePong(ByteBuf buf) {
 		return doEncode(buf, OP_PONG);
 	}
 
-	private ByteBuf encodeClose(@Nullable WebSocketException e) {
-		Integer code = e == null ? Integer.valueOf(1000) : e.getCode();
-		String message = e == null ? "" : e.getReason();
-		ByteBuf closePayload = ByteBufPool.allocate(code == null ? 0 : (2 + message.length()));
+	private ByteBuf encodeClose(WebSocketException e) {
+		Integer code = e.getCode();
+		String reason = e.getReason();
+		ByteBuf closePayload = ByteBufPool.allocate(code == null ? 0 : (2 + reason.length()));
 		if (code != null) {
 			closePayload.writeShort(code.shortValue());
 		}
-		if (!message.isEmpty()) {
-			ByteBuf messageBuf = ByteBufStrings.wrapUtf8(message);
-			closePayload.put(messageBuf);
-			messageBuf.recycle();
+		if (!reason.isEmpty()) {
+			ByteBuf reasonBuf = ByteBufStrings.wrapUtf8(reason);
+			closePayload.put(reasonBuf);
+			reasonBuf.recycle();
 		}
 		return doEncode(closePayload, OP_CLOSE);
 	}
@@ -172,7 +178,7 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 		}
 	}
 
-	private Promise<Void> sendCloseFrame(@Nullable WebSocketException e) {
+	private Promise<Void> sendCloseFrame(WebSocketException e) {
 		if (closing) return Promise.complete();
 		closing = true;
 		return doAccept(encodeClose(e))

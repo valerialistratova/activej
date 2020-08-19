@@ -35,11 +35,13 @@ import java.util.Arrays;
 
 import static io.activej.bytebuf.ByteBufStrings.*;
 import static io.activej.common.Checks.checkState;
+import static io.activej.csp.ChannelSupplier.ofLazyProvider;
 import static io.activej.csp.ChannelSuppliers.concat;
 import static io.activej.eventloop.util.RunnableWithContext.wrapContext;
 import static io.activej.http.HttpHeaders.CONNECTION;
 import static io.activej.http.HttpMessage.MUST_LOAD_BODY;
 import static io.activej.http.HttpMethod.*;
+import static io.activej.http.WebSocketConstants.HANDSHAKE_FAILED;
 
 /**
  * It represents server connection. It can receive {@link HttpRequest requests}
@@ -249,17 +251,16 @@ final class HttpServerConnection extends AbstractHttpConnection {
 		//noinspection ConstantConditions
 		request.flags |= MUST_LOAD_BODY;
 		if (isWebSocket()) {
-			request.bodyStream = concat(ChannelSupplier.of(readQueue.takeRemaining()), ChannelSupplier.ofSocket(socket))
-					.withEndOfStream(eos -> eos
-							.whenResult(this::onBodyReceived)
-							.whenException(e -> {
-								if (e instanceof WebSocketException) {
-									onBodyReceived();
-								} else {
-									closeWithError(e);
-								}
-							}));
-			flags |= BODY_RECEIVED;
+			if (body != null && body.readRemaining() == 0) {
+				ChannelSupplier<ByteBuf> ofQueueSupplier = ofLazyProvider(() -> ChannelSupplier.of(readQueue.takeRemaining()));
+				ChannelSupplier<ByteBuf> ofSocketSupplier = ChannelSupplier.ofSocket(socket);
+				request.bodyStream = concat(ofQueueSupplier, ofSocketSupplier)
+						.withEndOfStream(eos -> eos.whenException(this::closeWebSocketConnection));
+				flags |= BODY_RECEIVED;
+			} else {
+				closeWithError(HANDSHAKE_FAILED);
+				return;
+			}
 		} else {
 			request.body = body;
 			request.bodyStream = bodySupplier;

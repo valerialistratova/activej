@@ -37,7 +37,7 @@ public final class WebSocketException extends StacklessException {
 	}
 
 	public WebSocketException(Class<?> component, @NotNull Integer code, @NotNull String reason) {
-		super(component, checkArgument(reason, r -> r.length() <= 125, "Reason too long"));
+		super(component, checkArgument(reason, r -> r.length() <= 123, "Reason too long"));
 		this.code = code;
 	}
 

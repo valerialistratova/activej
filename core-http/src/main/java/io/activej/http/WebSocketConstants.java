@@ -21,7 +21,7 @@ import org.jetbrains.annotations.Nullable;
 
 public final class WebSocketConstants {
 	// region exceptions
-	public static final WebSocketException REGULAR_CLOSE = new WebSocketException(WebSocketConstants.class, 1000, "Regular close");
+	public static final WebSocketException REGULAR_CLOSE = new WebSocketException(WebSocketConstants.class, 1000);
 	public static final WebSocketException CLOSE_EXCEPTION = new WebSocketException(WebSocketConstants.class, 1001, "Closed");
 	public static final WebSocketException UNKNOWN_OP_CODE = new WebSocketException(WebSocketConstants.class, 1002, "Unknown op code");
 	public static final WebSocketException INVALID_PAYLOAD_LENGTH = new WebSocketException(WebSocketConstants.class, 1002, "Status code missing");
@@ -30,7 +30,7 @@ public final class WebSocketConstants {
 	public static final WebSocketException STATUS_CODE_MISSING = new WebSocketException(WebSocketConstants.class, 1005, "Status code missing");
 	public static final WebSocketException CLOSE_FRAME_MISSING = new WebSocketException(WebSocketConstants.class, 1006, "Peer did not send CLOSE frame");
 
-	public static final StacklessException HANDSHAKE_FAILED = new StacklessException(WebSocketConstants.class, "Server failed to perform a proper opening handshake");
+	public static final StacklessException HANDSHAKE_FAILED = new StacklessException(WebSocketConstants.class, "Failed to perform a proper opening handshake");
 	// endregion
 
 	static final String MAGIC_STRING = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

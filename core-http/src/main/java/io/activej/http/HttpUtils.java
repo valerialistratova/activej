@@ -20,8 +20,7 @@ import io.activej.bytebuf.ByteBuf;
 import io.activej.common.exception.parse.ParseException;
 import io.activej.common.exception.parse.UnknownFormatException;
 import io.activej.csp.ChannelSupplier;
-import io.activej.csp.dsl.ChannelSupplierTransformer;
-import io.activej.promise.Promise;
+import io.activej.promise.SettablePromise;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.UnsupportedEncodingException;
@@ -33,7 +32,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.Map;
-import java.util.function.Function;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static io.activej.bytebuf.ByteBufStrings.*;
 import static io.activej.http.HttpHeaders.*;
@@ -350,27 +349,23 @@ public final class HttpUtils {
 		}
 	}
 
-	static HttpResponse mapWebSocketResponse(HttpResponse response,
-			ChannelSupplierTransformer<ByteBuf, ChannelSupplier<ByteBuf>> transformer,
-			Function<Promise<Void>, Promise<Void>> eosFn) {
+	static HttpResponse webSocketUpgradeResponse(HttpResponse response, String answer) {
 		HttpResponse mappedRes = HttpResponse.ofCode(101)
 				.withHeader(UPGRADE, "Websocket")
-				.withHeader(CONNECTION, "Upgrade");
+				.withHeader(CONNECTION, "Upgrade")
+				.withHeader(SEC_WEBSOCKET_ACCEPT, answer);
 		for (Map.Entry<String, HttpCookie> cookieEntry : response.getCookies().entrySet()) {
 			mappedRes.addCookie(HttpCookie.of(cookieEntry.getKey(), cookieEntry.getValue().getValue()));
 		}
 		for (Map.Entry<HttpHeader, HttpHeaderValue> headerEntry : response.getHeaders()) {
 			mappedRes.addHeader(headerEntry.getKey(), headerEntry.getValue());
 		}
-		ChannelSupplier<ByteBuf> bodyStream = doGetBodyStream(response);
-		mappedRes.setBodyStream(bodyStream.transformWith(transformer)
-				.withEndOfStream(eosFn));
 		return mappedRes;
 	}
 
 	static ChannelSupplier<ByteBuf> doGetBodyStream(HttpMessage response) {
 		return response.bodyStream == null && response.body == null ?
-				ChannelSupplier.of() :
+				ChannelSupplier.of(SettablePromise::new) :
 				response.getBodyStream();
 	}
 
@@ -395,5 +390,16 @@ public final class HttpUtils {
 			throw new RuntimeException(e);
 		}
 		return answer;
+	}
+
+	static byte[] generateWebSocketKey() {
+		byte[] key = new byte[16];
+		ThreadLocalRandom.current().nextBytes(key);
+		return Base64.getEncoder().encode(key);
+	}
+
+	static boolean isAnswerInvalid(HttpResponse response, byte[] key) {
+		String header = response.getHeader(SEC_WEBSOCKET_ACCEPT);
+		return header == null || !getWebSocketAnswer(new String(key)).equals(header.trim());
 	}
 }
