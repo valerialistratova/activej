@@ -18,6 +18,7 @@ package io.activej.http;
 
 import io.activej.bytebuf.ByteBuf;
 import io.activej.bytebuf.ByteBufQueue;
+import io.activej.common.annotation.Beta;
 import io.activej.csp.ChannelConsumer;
 import io.activej.csp.ChannelOutput;
 import io.activej.csp.binary.BinaryChannelInput;
@@ -35,6 +36,7 @@ import static io.activej.http.WebSocketConstants.*;
 import static io.activej.http.WebSocketConstants.OpCode.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+@Beta
 final class WebSocketDecoder extends AbstractCommunicatingProcess
 		implements WithChannelTransformer<WebSocketDecoder, ByteBuf, ByteBuf>, WithBinaryChannelInput<WebSocketDecoder> {
 

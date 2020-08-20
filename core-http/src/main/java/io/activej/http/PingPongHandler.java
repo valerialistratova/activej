@@ -17,9 +17,11 @@
 package io.activej.http;
 
 import io.activej.bytebuf.ByteBuf;
+import io.activej.common.annotation.Beta;
 
 import java.util.function.Consumer;
 
+@Beta
 interface PingPongHandler {
 	void onPing(ByteBuf payload);
 

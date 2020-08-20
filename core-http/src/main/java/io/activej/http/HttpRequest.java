@@ -18,6 +18,7 @@ package io.activej.http;
 
 import io.activej.bytebuf.ByteBuf;
 import io.activej.common.Checks;
+import io.activej.common.annotation.Beta;
 import io.activej.common.api.WithInitializer;
 import io.activej.csp.ChannelSupplier;
 import io.activej.http.HttpHeaderValue.HttpHeaderValueOfSimpleCookies;
@@ -95,6 +96,7 @@ public final class HttpRequest extends HttpMessage implements WithInitializer<Ht
 		return HttpRequest.of(PUT, url);
 	}
 
+	@Beta
 	@NotNull
 	public static HttpRequest webSocket(@NotNull String url) {
 		HttpRequest request = new HttpRequest(GET, null);
@@ -104,10 +106,13 @@ public final class HttpRequest extends HttpMessage implements WithInitializer<Ht
 		return request;
 	}
 
+	@Beta
 	@NotNull
-	public static HttpRequest webSocketText(@NotNull String url) {
+	public static HttpRequest webSocket(WebSocketOptions webSocketOptions, @NotNull String url) {
 		HttpRequest request = webSocket(url);
-		request.flags |= WS_DATA_TEXT;
+		if (webSocketOptions.isTextData()) {
+			request.flags |= WS_DATA_TEXT;
+		}
 		return request;
 	}
 
@@ -200,8 +205,17 @@ public final class HttpRequest extends HttpMessage implements WithInitializer<Ht
 		remoteAddress = inetAddress;
 	}
 
+	@Deprecated
+	public boolean isHttps() {
+		return url.getProtocol() == HTTPS;
+	}
+
 	public Protocol getProtocol() {
 		return url.getProtocol();
+	}
+
+	void setProtocol(Protocol protocol) {
+		url.setProtocol(protocol);
 	}
 
 	@Override

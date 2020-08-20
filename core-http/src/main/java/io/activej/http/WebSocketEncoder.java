@@ -19,6 +19,7 @@ package io.activej.http;
 import io.activej.bytebuf.ByteBuf;
 import io.activej.bytebuf.ByteBufPool;
 import io.activej.bytebuf.ByteBufStrings;
+import io.activej.common.annotation.Beta;
 import io.activej.csp.ChannelConsumer;
 import io.activej.csp.ChannelInput;
 import io.activej.csp.ChannelOutput;
@@ -36,6 +37,7 @@ import static io.activej.common.Checks.checkState;
 import static io.activej.http.WebSocketConstants.OpCode.*;
 import static io.activej.http.WebSocketConstants.REGULAR_CLOSE;
 
+@Beta
 final class WebSocketEncoder extends AbstractCommunicatingProcess
 		implements WithChannelTransformer<WebSocketEncoder, ByteBuf, ByteBuf>, PingPongHandler {
 	private static final ThreadLocalRandom RANDOM = ThreadLocalRandom.current();

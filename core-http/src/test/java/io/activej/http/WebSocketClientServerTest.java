@@ -24,7 +24,6 @@ import java.util.stream.IntStream;
 import static io.activej.bytebuf.ByteBufStrings.wrapUtf8;
 import static io.activej.http.TestUtils.chunker;
 import static io.activej.http.WebSocketConstants.HANDSHAKE_FAILED;
-import static io.activej.http.WebSocketDecorator.webSocket;
 import static io.activej.https.SslUtils.createTestSslContext;
 import static io.activej.promise.TestUtils.await;
 import static io.activej.promise.TestUtils.awaitException;
@@ -182,7 +181,8 @@ public final class WebSocketClientServerTest {
 	}
 
 	private void startTestServer(AsyncServlet servlet) throws IOException {
-		AsyncHttpServer.create(Eventloop.getCurrentEventloop(), webSocket(servlet))
+		AsyncHttpServer.create(Eventloop.getCurrentEventloop(), RoutingServlet.create()
+				.mapWebSocket("/", servlet))
 				.withListenPort(PORT)
 				.withAcceptOnce()
 				.listen();
@@ -190,7 +190,8 @@ public final class WebSocketClientServerTest {
 
 	private void startSecureTestServer(AsyncServlet servlet) throws IOException {
 		ExecutorService executor = Executors.newSingleThreadExecutor();
-		AsyncHttpServer server = AsyncHttpServer.create(Eventloop.getCurrentEventloop(), webSocket(servlet))
+		AsyncHttpServer server = AsyncHttpServer.create(Eventloop.getCurrentEventloop(), RoutingServlet.create()
+				.mapWebSocket("/", servlet))
 				.withSslListenPort(createTestSslContext(), executor, PORT)
 				.withAcceptOnce();
 		server.getCloseNotification().whenComplete(executor::shutdown);

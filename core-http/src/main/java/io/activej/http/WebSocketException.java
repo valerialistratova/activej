@@ -16,12 +16,14 @@
 
 package io.activej.http;
 
+import io.activej.common.annotation.Beta;
 import io.activej.common.exception.StacklessException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import static io.activej.common.Checks.checkArgument;
 
+@Beta
 public final class WebSocketException extends StacklessException {
 	@Nullable
 	private final Integer code;

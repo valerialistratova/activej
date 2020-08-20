@@ -26,6 +26,7 @@ import io.activej.csp.ChannelSupplier;
 import io.activej.eventloop.Eventloop;
 import io.activej.http.AsyncHttpServer.Inspector;
 import io.activej.net.socket.tcp.AsyncTcpSocket;
+import io.activej.net.socket.tcp.AsyncTcpSocketSsl;
 import io.activej.promise.Promise;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -41,6 +42,7 @@ import static io.activej.eventloop.util.RunnableWithContext.wrapContext;
 import static io.activej.http.HttpHeaders.CONNECTION;
 import static io.activej.http.HttpMessage.MUST_LOAD_BODY;
 import static io.activej.http.HttpMethod.*;
+import static io.activej.http.Protocol.*;
 import static io.activej.http.WebSocketConstants.HANDSHAKE_FAILED;
 
 /**
@@ -257,11 +259,13 @@ final class HttpServerConnection extends AbstractHttpConnection {
 				request.bodyStream = concat(ofQueueSupplier, ofSocketSupplier)
 						.withEndOfStream(eos -> eos.whenException(this::closeWebSocketConnection));
 				flags |= BODY_RECEIVED;
+				request.setProtocol(socket instanceof AsyncTcpSocketSsl ? WSS : WS);
 			} else {
 				closeWithError(HANDSHAKE_FAILED);
 				return;
 			}
 		} else {
+			request.setProtocol(socket instanceof AsyncTcpSocketSsl ? HTTPS : HTTP);
 			request.body = body;
 			request.bodyStream = bodySupplier;
 		}

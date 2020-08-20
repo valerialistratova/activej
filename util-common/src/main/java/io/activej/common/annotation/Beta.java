@@ -14,27 +14,25 @@
  * limitations under the License.
  */
 
-package io.activej.http;
+package io.activej.common.annotation;
 
-import io.activej.common.annotation.Beta;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
-public enum Protocol {
-	HTTP,
-	HTTPS,
-	@Beta WS,
-	@Beta WSS;
-
-	private final String lowercase;
-
-	public String lowercase() {
-		return lowercase;
-	}
-
-	public boolean isSecure() {
-		return this == HTTPS || this == WSS;
-	}
-
-	Protocol() {
-		lowercase = name().toLowerCase();
-	}
+/**
+ * Elements that are marked with this annotation are experimental and are subject to change.
+ * <p>
+ * API of such elements may be changed or removed without following semantic versioning.
+ */
+@Retention(RetentionPolicy.SOURCE)
+@Target({
+		ElementType.ANNOTATION_TYPE,
+		ElementType.CONSTRUCTOR,
+		ElementType.FIELD,
+		ElementType.METHOD,
+		ElementType.TYPE
+})
+public @interface Beta {
 }

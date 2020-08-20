@@ -16,9 +16,11 @@
 
 package io.activej.http;
 
+import io.activej.common.annotation.Beta;
 import io.activej.common.exception.StacklessException;
 import org.jetbrains.annotations.Nullable;
 
+@Beta
 public final class WebSocketConstants {
 	// region exceptions
 	public static final WebSocketException REGULAR_CLOSE = new WebSocketException(WebSocketConstants.class, 1000);
@@ -31,6 +33,8 @@ public final class WebSocketConstants {
 	public static final WebSocketException CLOSE_FRAME_MISSING = new WebSocketException(WebSocketConstants.class, 1006, "Peer did not send CLOSE frame");
 
 	public static final StacklessException HANDSHAKE_FAILED = new StacklessException(WebSocketConstants.class, "Failed to perform a proper opening handshake");
+
+	public static final HttpException NOT_A_WEB_SOCKET_REQUEST = HttpException.ofCode(400, "Not a websocket request");
 	// endregion
 
 	static final String MAGIC_STRING = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

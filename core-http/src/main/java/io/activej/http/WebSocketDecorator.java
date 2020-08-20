@@ -17,6 +17,7 @@
 package io.activej.http;
 
 import io.activej.bytebuf.ByteBuf;
+import io.activej.common.annotation.Beta;
 import io.activej.csp.ChannelSupplier;
 import io.activej.promise.Promise;
 import io.activej.promise.SettablePromise;
@@ -28,21 +29,19 @@ import static io.activej.http.AbstractHttpConnection.WEB_SOCKET_VERSION;
 import static io.activej.http.AsyncServletDecorator.mapResponse;
 import static io.activej.http.HttpHeaders.*;
 import static io.activej.http.HttpUtils.*;
+import static io.activej.http.WebSocketConstants.NOT_A_WEB_SOCKET_REQUEST;
 import static io.activej.http.WebSocketConstants.REGULAR_CLOSE;
 
-public final class WebSocketDecorator implements AsyncServletDecorator {
-	private final boolean isTextData;
+@Beta
+final class WebSocketDecorator implements AsyncServletDecorator {
+	private final WebSocketOptions webSocketOptions;
 
-	private WebSocketDecorator(boolean isTextData) {
-		this.isTextData = isTextData;
+	private WebSocketDecorator(WebSocketOptions webSocketOptions) {
+		this.webSocketOptions = webSocketOptions;
 	}
 
-	public static AsyncServlet webSocket(AsyncServlet servlet) {
-		return new WebSocketDecorator(false).serve(servlet);
-	}
-
-	public static AsyncServlet webSocketText(AsyncServlet servlet) {
-		return new WebSocketDecorator(true).serve(servlet);
+	static AsyncServlet webSocket(WebSocketOptions webSocketOptions, AsyncServlet servlet) {
+		return new WebSocketDecorator(webSocketOptions).serve(servlet);
 	}
 
 	@NotNull
@@ -73,7 +72,7 @@ public final class WebSocketDecorator implements AsyncServletDecorator {
 							return response;
 						}
 
-						encoder.useTextEncoding(isTextData);
+						encoder.useTextEncoding(webSocketOptions.isTextData());
 						successfulUpgrade.set(null);
 
 						encoder.getCloseSentPromise().then(decoder::getCloseReceivedPromise)
@@ -90,7 +89,7 @@ public final class WebSocketDecorator implements AsyncServletDecorator {
 		if (isHeaderMissing(request, UPGRADE, "websocket") ||
 				isHeaderMissing(request, CONNECTION, "upgrade") ||
 				!Arrays.equals(WEB_SOCKET_VERSION, request.getHeader(SEC_WEBSOCKET_VERSION, ByteBuf::getArray))) {
-			return Promise.ofException(HttpException.ofCode(400, "Not a websocket request"));
+			return Promise.ofException(NOT_A_WEB_SOCKET_REQUEST);
 		}
 		return Promise.complete();
 	}
@@ -98,7 +97,7 @@ public final class WebSocketDecorator implements AsyncServletDecorator {
 	private static Promise<String> processAnswer(HttpRequest request) {
 		String header = request.getHeader(SEC_WEBSOCKET_KEY);
 		if (header == null) {
-			return Promise.ofException(HttpException.ofCode(400, "Not a websocket request"));
+			return Promise.ofException(NOT_A_WEB_SOCKET_REQUEST);
 		}
 		return Promise.of(getWebSocketAnswer(header.trim()));
 	}

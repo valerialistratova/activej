@@ -18,23 +18,23 @@ package io.activej.http;
 
 import io.activej.common.annotation.Beta;
 
-public enum Protocol {
-	HTTP,
-	HTTPS,
-	@Beta WS,
-	@Beta WSS;
+@Beta
+public final class WebSocketOptions {
+	private final boolean isTextData;
 
-	private final String lowercase;
-
-	public String lowercase() {
-		return lowercase;
+	private WebSocketOptions(boolean isTextData) {
+		this.isTextData = isTextData;
 	}
 
-	public boolean isSecure() {
-		return this == HTTPS || this == WSS;
+	public static WebSocketOptions create() {
+		return new WebSocketOptions(false);
 	}
 
-	Protocol() {
-		lowercase = name().toLowerCase();
+	public WebSocketOptions withTextData(boolean isTextData) {
+		return new WebSocketOptions(isTextData);
+	}
+
+	public boolean isTextData() {
+		return isTextData;
 	}
 }

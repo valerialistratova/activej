@@ -239,6 +239,10 @@ public final class UrlParser {
 		return protocol;
 	}
 
+	void setProtocol(Protocol protocol) {
+		this.protocol = protocol;
+	}
+
 	@Nullable
 	public String getHostAndPort() {
 		if (host == -1) {
