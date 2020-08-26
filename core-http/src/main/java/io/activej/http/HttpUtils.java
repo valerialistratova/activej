@@ -19,8 +19,9 @@ package io.activej.http;
 import io.activej.bytebuf.ByteBuf;
 import io.activej.common.exception.parse.ParseException;
 import io.activej.common.exception.parse.UnknownFormatException;
-import io.activej.csp.ChannelSupplier;
-import io.activej.promise.SettablePromise;
+import io.activej.http.WebSocketConstants.FrameType;
+import io.activej.http.WebSocketConstants.MessageType;
+import io.activej.http.WebSocketConstants.OpCode;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.UnsupportedEncodingException;
@@ -28,6 +29,7 @@ import java.net.InetAddress;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.net.UnknownHostException;
+import java.nio.charset.CharacterCodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
@@ -35,8 +37,11 @@ import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static io.activej.bytebuf.ByteBufStrings.*;
-import static io.activej.http.HttpHeaders.*;
+import static io.activej.http.HttpHeaders.HOST;
+import static io.activej.http.HttpHeaders.SEC_WEBSOCKET_ACCEPT;
+import static io.activej.http.WebSocketConstants.FrameType.*;
 import static io.activej.http.WebSocketConstants.MAGIC_STRING;
+import static io.activej.http.WebSocketConstants.OpCode.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
@@ -349,26 +354,6 @@ public final class HttpUtils {
 		}
 	}
 
-	static HttpResponse webSocketUpgradeResponse(HttpResponse response, String answer) {
-		HttpResponse mappedRes = HttpResponse.ofCode(101)
-				.withHeader(UPGRADE, "Websocket")
-				.withHeader(CONNECTION, "Upgrade")
-				.withHeader(SEC_WEBSOCKET_ACCEPT, answer);
-		for (Map.Entry<String, HttpCookie> cookieEntry : response.getCookies().entrySet()) {
-			mappedRes.addCookie(HttpCookie.of(cookieEntry.getKey(), cookieEntry.getValue().getValue()));
-		}
-		for (Map.Entry<HttpHeader, HttpHeaderValue> headerEntry : response.getHeaders()) {
-			mappedRes.addHeader(headerEntry.getKey(), headerEntry.getValue());
-		}
-		return mappedRes;
-	}
-
-	static ChannelSupplier<ByteBuf> doGetBodyStream(HttpMessage response) {
-		return response.bodyStream == null && response.body == null ?
-				ChannelSupplier.of(SettablePromise::new) :
-				response.getBodyStream();
-	}
-
 	static boolean isHeaderMissing(HttpMessage message, HttpHeader header, String value) {
 		String headerValue = message.getHeader(header);
 		if (headerValue != null) {
@@ -402,4 +387,52 @@ public final class HttpUtils {
 		String header = response.getHeader(SEC_WEBSOCKET_ACCEPT);
 		return header == null || !getWebSocketAnswer(new String(key)).equals(header.trim());
 	}
+
+	static boolean isReservedCloseCode(int closeCode) {
+		return closeCode < 1000 ||
+				(closeCode >= 1004 && closeCode < 1007) ||
+				(closeCode >= 1015 && closeCode < 3000);
+	}
+
+	static String getUTF8(ByteBuf buf) throws CharacterCodingException {
+		return UTF_8.newDecoder().decode(buf.toReadByteBuffer()).toString();
+	}
+
+	static OpCode frameToOpType(FrameType frameType) {
+		switch (frameType) {
+			case TEXT:
+				return OP_TEXT;
+			case BINARY:
+				return OP_BINARY;
+			case CONTINUATION:
+				return OP_CONTINUATION;
+			default:
+				throw new AssertionError();
+		}
+	}
+
+	static FrameType opToFrameType(OpCode opType) {
+		switch (opType) {
+			case OP_TEXT:
+				return TEXT;
+			case OP_BINARY:
+				return BINARY;
+			case OP_CONTINUATION:
+				return CONTINUATION;
+			default:
+				throw new AssertionError();
+		}
+	}
+
+	static MessageType frameToMessageType(FrameType frameType) {
+		switch (frameType) {
+			case TEXT:
+				return MessageType.TEXT;
+			case BINARY:
+				return MessageType.BINARY;
+			default:
+				throw new AssertionError();
+		}
+	}
+
 }

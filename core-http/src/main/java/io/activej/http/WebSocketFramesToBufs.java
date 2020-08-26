@@ -26,7 +26,7 @@ import io.activej.csp.ChannelOutput;
 import io.activej.csp.ChannelSupplier;
 import io.activej.csp.dsl.WithChannelTransformer;
 import io.activej.csp.process.AbstractCommunicatingProcess;
-import io.activej.http.WebSocketConstants.OpCode;
+import io.activej.http.WebSocketConstants.*;
 import io.activej.promise.Promise;
 import io.activej.promise.SettablePromise;
 import org.jetbrains.annotations.Nullable;
@@ -34,37 +34,38 @@ import org.jetbrains.annotations.Nullable;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static io.activej.common.Checks.checkState;
-import static io.activej.http.WebSocketConstants.OpCode.*;
-import static io.activej.http.WebSocketConstants.REGULAR_CLOSE;
+import static io.activej.http.HttpUtils.frameToOpType;
+import static io.activej.http.WebSocketConstants.*;
+import static io.activej.http.WebSocketConstants.OpCode.OP_CLOSE;
+import static io.activej.http.WebSocketConstants.OpCode.OP_PONG;
 
 @Beta
-final class WebSocketEncoder extends AbstractCommunicatingProcess
-		implements WithChannelTransformer<WebSocketEncoder, ByteBuf, ByteBuf>, PingPongHandler {
+final class WebSocketFramesToBufs extends AbstractCommunicatingProcess
+		implements WithChannelTransformer<WebSocketFramesToBufs, WebSocket.Frame, ByteBuf>, PingPongHandler {
 	private static final ThreadLocalRandom RANDOM = ThreadLocalRandom.current();
 
 	private final boolean masked;
 	private final SettablePromise<Void> closeSentPromise = new SettablePromise<>();
 
-	private ChannelSupplier<ByteBuf> input;
+	private ChannelSupplier<WebSocket.Frame> input;
 	private ChannelConsumer<ByteBuf> output;
 
 	@Nullable
 	private Promise<Void> pendingPromise;
-	private OpCode payloadOpCode = OP_BINARY;
 	private boolean closing;
 
 	// region creators
-	private WebSocketEncoder(boolean masked) {
+	private WebSocketFramesToBufs(boolean masked) {
 		this.masked = masked;
 	}
 
-	public static WebSocketEncoder create(boolean masked) {
-		return new WebSocketEncoder(masked);
+	public static WebSocketFramesToBufs create(boolean masked) {
+		return new WebSocketFramesToBufs(masked);
 	}
 
 	@SuppressWarnings("ConstantConditions") //check input for clarity
 	@Override
-	public ChannelInput<ByteBuf> getInput() {
+	public ChannelInput<WebSocket.Frame> getInput() {
 		return input -> {
 			checkState(this.input == null, "Input already set");
 			this.input = sanitize(input);
@@ -82,10 +83,6 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 			if (this.input != null && this.output != null) startProcess();
 		};
 	}
-
-	public void useTextEncoding(boolean use) {
-		this.payloadOpCode = use ? OP_TEXT : OP_BINARY;
-	}
 	// endregion
 
 	@Override
@@ -96,19 +93,18 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 
 	@Override
 	protected void doProcess() {
-		input.filter(ByteBuf::canRead)
-				.streamTo(ChannelConsumer.of(buf -> doAccept(encodeData(buf))))
+		input.streamTo(ChannelConsumer.of(frame -> doAccept(encodeData(frame))))
 				.then(() -> sendCloseFrame(REGULAR_CLOSE))
 				.whenComplete(($, e) -> input.closeEx(e == null ? REGULAR_CLOSE : e))
 				.whenResult(this::completeProcess);
 	}
 
-	private ByteBuf doEncode(ByteBuf buf, OpCode opCode) {
-		int bufSize = buf.readRemaining();
+	private ByteBuf doEncode(ByteBuf payload, OpCode opCode, boolean isLastFrame) {
+		int bufSize = payload.readRemaining();
 		int lenSize = bufSize < 126 ? 1 : bufSize < 65536 ? 3 : 9;
 
 		ByteBuf framedBuf = ByteBufPool.allocate(1 + lenSize + (masked ? 4 : 0) + bufSize);
-		framedBuf.writeByte((byte) (opCode.getCode() | 0x80));
+		framedBuf.writeByte(isLastFrame ? (byte) (opCode.getCode() | 0x80) : opCode.getCode());
 		if (lenSize == 1) {
 			framedBuf.writeByte((byte) bufSize);
 		} else if (lenSize == 3) {
@@ -124,21 +120,21 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 			byte[] mask = new byte[4];
 			RANDOM.nextBytes(mask);
 			framedBuf.put(mask);
-			for (int i = 0, head = buf.head(); head < buf.tail(); head++) {
-				buf.set(head, (byte) (buf.at(head) ^ mask[i++ % 4]));
+			for (int i = 0, head = payload.head(); head < payload.tail(); head++) {
+				payload.set(head, (byte) (payload.at(head) ^ mask[i++ % 4]));
 			}
 		}
-		framedBuf.put(buf);
-		buf.recycle();
+		framedBuf.put(payload);
+		payload.recycle();
 		return framedBuf;
 	}
 
-	private ByteBuf encodeData(ByteBuf buf) {
-		return doEncode(buf, payloadOpCode);
+	private ByteBuf encodeData(WebSocket.Frame frame) {
+		return doEncode(frame.getPayload(), frameToOpType(frame.getType()), frame.isLastFrame());
 	}
 
 	private ByteBuf encodePong(ByteBuf buf) {
-		return doEncode(buf, OP_PONG);
+		return doEncode(buf, OP_PONG, true);
 	}
 
 	private ByteBuf encodeClose(WebSocketException e) {
@@ -153,7 +149,7 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 			closePayload.put(reasonBuf);
 			reasonBuf.recycle();
 		}
-		return doEncode(closePayload, OP_CLOSE);
+		return doEncode(closePayload, OP_CLOSE, true);
 	}
 
 	@Override
@@ -183,7 +179,7 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 	private Promise<Void> sendCloseFrame(WebSocketException e) {
 		if (closing) return Promise.complete();
 		closing = true;
-		return doAccept(encodeClose(e))
+		return doAccept(encodeClose(e == STATUS_CODE_MISSING ? EMPTY_CLOSE : e))
 				.then(() -> doAccept(null))
 				.whenComplete(() -> closeSentPromise.trySet(null));
 	}
@@ -194,8 +190,15 @@ final class WebSocketEncoder extends AbstractCommunicatingProcess
 			return;
 		}
 		WebSocketException exception;
-		if (e instanceof WebSocketException && ((WebSocketException) e).canBeEchoed()) {
-			exception = (WebSocketException) e;
+		if (e instanceof WebSocketException) {
+			WebSocketException wsEx = (WebSocketException) e;
+			if (wsEx.canBeEchoed()) {
+				exception = wsEx;
+			} else {
+				Integer code = wsEx.getCode();
+				assert code != null;
+				exception = code == 1005 ? EMPTY_CLOSE : WebSocketConstants.CLOSE_EXCEPTION;
+			}
 		} else {
 			exception = WebSocketConstants.CLOSE_EXCEPTION;
 		}

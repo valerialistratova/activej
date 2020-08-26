@@ -23,14 +23,22 @@ import org.jetbrains.annotations.Nullable;
 @Beta
 public final class WebSocketConstants {
 	// region exceptions
+	public static final WebSocketException EMPTY_CLOSE = new WebSocketException(WebSocketConstants.class);
 	public static final WebSocketException REGULAR_CLOSE = new WebSocketException(WebSocketConstants.class, 1000);
 	public static final WebSocketException CLOSE_EXCEPTION = new WebSocketException(WebSocketConstants.class, 1001, "Closed");
 	public static final WebSocketException UNKNOWN_OP_CODE = new WebSocketException(WebSocketConstants.class, 1002, "Unknown op code");
-	public static final WebSocketException INVALID_PAYLOAD_LENGTH = new WebSocketException(WebSocketConstants.class, 1002, "Status code missing");
+	public static final WebSocketException RESERVED_BITS_SET = new WebSocketException(WebSocketConstants.class, 1002, "Reserved bits set, unknown extension");
+	public static final WebSocketException FRAGMENTED_CONTROL_MESSAGE = new WebSocketException(WebSocketConstants.class, 1002, "Control messages should not be fragmented");
+	public static final WebSocketException INVALID_CLOSE_CODE = new WebSocketException(WebSocketConstants.class, 1002, "Invalid close code");
+	public static final WebSocketException WAITING_FOR_LAST_FRAME = new WebSocketException(WebSocketConstants.class, 1002, "Last frame has not been received yet");
+	public static final WebSocketException UNEXPECTED_CONTINUATION = new WebSocketException(WebSocketConstants.class, 1002, "Received unexpected continuation frame");
+	public static final WebSocketException INVALID_PAYLOAD_LENGTH = new WebSocketException(WebSocketConstants.class, 1002, "Invalid payload length");
 	public static final WebSocketException MASK_REQUIRED = new WebSocketException(WebSocketConstants.class, 1002, "Message should be masked");
 	public static final WebSocketException MASK_SHOULD_NOT_BE_PRESENT = new WebSocketException(WebSocketConstants.class, 1002, "Message should not be masked");
 	public static final WebSocketException STATUS_CODE_MISSING = new WebSocketException(WebSocketConstants.class, 1005, "Status code missing");
 	public static final WebSocketException CLOSE_FRAME_MISSING = new WebSocketException(WebSocketConstants.class, 1006, "Peer did not send CLOSE frame");
+	public static final WebSocketException NOT_A_VALID_UTF_8 = new WebSocketException(WebSocketConstants.class, 1007, "Received TEXT message is not a valid UTF-8 message");
+	public static final WebSocketException MESSAGE_TOO_BIG = new WebSocketException(WebSocketConstants.class, 1009, "Received message is too big");
 
 	public static final StacklessException HANDSHAKE_FAILED = new StacklessException(WebSocketConstants.class, "Failed to perform a proper opening handshake");
 
@@ -74,5 +82,13 @@ public final class WebSocketConstants {
 			}
 			return null;
 		}
+	}
+
+	public enum FrameType {
+		TEXT, BINARY, CONTINUATION
+	}
+
+	public enum MessageType {
+		TEXT, BINARY
 	}
 }

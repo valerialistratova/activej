@@ -83,6 +83,7 @@ final class HttpServerConnection extends AbstractHttpConnection {
 	private final AsyncServlet servlet;
 	private final char[] charBuffer;
 	private final int maxBodySize;
+	private final int maxWebSocketMessageSize;
 
 	private static final byte[] EXPECT_100_CONTINUE = encodeAscii("100-continue");
 	private static final byte[] EXPECT_RESPONSE_CONTINUE = encodeAscii("HTTP/1.1 100 Continue\r\n\r\n");
@@ -104,6 +105,7 @@ final class HttpServerConnection extends AbstractHttpConnection {
 		this.inspector = server.inspector;
 		this.charBuffer = charBuffer;
 		this.maxBodySize = server.maxBodySize;
+		this.maxWebSocketMessageSize = server.maxWebSocketMessageSize;
 	}
 
 	public void serve() {
@@ -260,6 +262,7 @@ final class HttpServerConnection extends AbstractHttpConnection {
 						.withEndOfStream(eos -> eos.whenException(this::closeWebSocketConnection));
 				flags |= BODY_RECEIVED;
 				request.setProtocol(socket instanceof AsyncTcpSocketSsl ? WSS : WS);
+				request.maxBodySize = maxWebSocketMessageSize;
 			} else {
 				closeWithError(HANDSHAKE_FAILED);
 				return;

@@ -1,8 +1,8 @@
 package io.activej.http;
 
 import io.activej.bytebuf.ByteBuf;
-import io.activej.bytebuf.ByteBufQueue;
 import io.activej.csp.ChannelSupplier;
+import io.activej.http.WebSocket.Frame;
 import io.activej.test.rules.ByteBufRule;
 import io.activej.test.rules.EventloopRule;
 import org.junit.ClassRule;
@@ -10,14 +10,17 @@ import org.junit.Ignore;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.List;
 
 import static io.activej.bytebuf.ByteBuf.wrapForReading;
 import static io.activej.csp.dsl.ChannelSupplierTransformer.identity;
 import static io.activej.http.TestUtils.chunker;
 import static io.activej.http.TestUtils.randomBytes;
+import static io.activej.http.WebSocketConstants.FrameType.BINARY;
 import static io.activej.promise.TestUtils.await;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.junit.Assert.assertArrayEquals;
+import static java.util.stream.Collectors.toList;
+import static org.junit.Assert.*;
 
 public final class WebSocketIntegrationTest {
 	@ClassRule
@@ -27,6 +30,7 @@ public final class WebSocketIntegrationTest {
 	public static final ByteBufRule byteBufRule = new ByteBufRule();
 
 	private static final PingPongHandler HANDLER_STUB = PingPongHandler.of(ByteBuf::recycle, ByteBuf::recycle);
+	private static final int MAX_MESSAGE_SIZE = 1_000;
 
 	@Test
 	public void simpleMessage() {
@@ -65,13 +69,16 @@ public final class WebSocketIntegrationTest {
 	private void doTest(byte[] bytes, boolean mask, boolean chunked) {
 		byte[] bytesCopy = Arrays.copyOf(bytes, bytes.length);
 		ByteBuf buf = wrapForReading(bytesCopy);
-		ByteBuf result = await(ChannelSupplier.of(buf)
+		List<Frame> result = await(ChannelSupplier.of(Frame.binary(buf))
+				.transformWith(WebSocketFramesToBufs.create(mask))
 				.transformWith(chunked ? chunker() : identity())
-				.transformWith(WebSocketEncoder.create(mask))
-				.transformWith(chunked ? chunker() : identity())
-				.transformWith(WebSocketDecoder.create(HANDLER_STUB, mask))
-				.toCollector(ByteBufQueue.collector()));
+				.transformWith(WebSocketBufsToFrames.create(MAX_MESSAGE_SIZE, HANDLER_STUB, mask))
+				.toCollector(toList()));
 
-		assertArrayEquals(bytes, result.asArray());
+		assertEquals(1, result.size());
+		Frame frame = result.get(0);
+		assertArrayEquals(bytes, frame.getPayload().asArray());
+		assertEquals(BINARY, frame.getType());
+		assertTrue(frame.isLastFrame());
 	}
 }

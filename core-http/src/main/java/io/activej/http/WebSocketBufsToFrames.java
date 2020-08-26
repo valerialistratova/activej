@@ -30,22 +30,25 @@ import io.activej.csp.process.AbstractCommunicatingProcess;
 import io.activej.promise.Promise;
 import io.activej.promise.SettablePromise;
 
+import java.nio.charset.CharacterCodingException;
+
 import static io.activej.common.Checks.checkState;
 import static io.activej.csp.binary.ByteBufsDecoder.ofFixedSize;
+import static io.activej.http.HttpUtils.*;
 import static io.activej.http.WebSocketConstants.*;
 import static io.activej.http.WebSocketConstants.OpCode.*;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 @Beta
-final class WebSocketDecoder extends AbstractCommunicatingProcess
-		implements WithChannelTransformer<WebSocketDecoder, ByteBuf, ByteBuf>, WithBinaryChannelInput<WebSocketDecoder> {
+final class WebSocketBufsToFrames extends AbstractCommunicatingProcess
+		implements WithChannelTransformer<WebSocketBufsToFrames, ByteBuf, WebSocket.Frame>, WithBinaryChannelInput<WebSocketBufsToFrames> {
 
-	private static final byte FIRST_BIT_MASK = (byte) 0b10000000;
 	private static final byte OP_CODE_MASK = 0b00001111;
+	private static final byte RSV_MASK = 0b01110000;
 	private static final byte LAST_7_BITS_MASK = 0b01111111;
 
 	private static final ByteBufsDecoder<Byte> SINGLE_BYTE_DECODER = queue -> queue.hasRemainingBytes(1) ? queue.getByte() : null;
 
+	private final long maxMessageSize;
 	private final PingPongHandler pingPongHandler;
 	private final byte[] mask = new byte[4];
 	private final boolean masked;
@@ -53,21 +56,25 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 
 	private ByteBufQueue bufs;
 	private BinaryChannelSupplier input;
-	private ChannelConsumer<ByteBuf> output;
+	private ChannelConsumer<WebSocket.Frame> output;
 
 	private int maskIndex;
+	private boolean isFin;
+	private boolean waitingForFin;
 	private WebSocketConstants.OpCode currentOpCode;
 
+	private final ByteBufQueue frameQueue = new ByteBufQueue();
 	private final ByteBufQueue controlMessageQueue = new ByteBufQueue();
 
 	// region creators
-	private WebSocketDecoder(PingPongHandler pingPongHandler, boolean masked) {
+	WebSocketBufsToFrames(long maxMessageSize, PingPongHandler pingPongHandler, boolean masked) {
+		this.maxMessageSize = maxMessageSize;
 		this.pingPongHandler = pingPongHandler;
 		this.masked = masked;
 	}
 
-	public static WebSocketDecoder create(PingPongHandler pingPongHandler, boolean maskRequired) {
-		return new WebSocketDecoder(pingPongHandler, maskRequired);
+	public static WebSocketBufsToFrames create(long maxMessageSize, PingPongHandler pingPongHandler, boolean maskRequired) {
+		return new WebSocketBufsToFrames(maxMessageSize, pingPongHandler, maskRequired);
 	}
 
 	@Override
@@ -83,7 +90,7 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 
 	@SuppressWarnings("ConstantConditions") //check output for clarity
 	@Override
-	public ChannelOutput<ByteBuf> getOutput() {
+	public ChannelOutput<WebSocket.Frame> getOutput() {
 		return output -> {
 			checkState(this.output == null, "Output already set");
 			this.output = sanitize(output);
@@ -110,12 +117,41 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 	private void processOpCode() {
 		input.parse(SINGLE_BYTE_DECODER)
 				.whenResult(firstByte -> {
+					if ((firstByte & RSV_MASK) != 0) {
+						onProtocolError(RESERVED_BITS_SET);
+						return;
+					}
+
 					byte opCodeByte = (byte) (firstByte & OP_CODE_MASK);
 					currentOpCode = fromOpCodeByte(opCodeByte);
-
 					if (currentOpCode == null) {
-						closeEx(UNKNOWN_OP_CODE);
+						onProtocolError(UNKNOWN_OP_CODE);
 						return;
+					}
+
+					isFin = firstByte < 0;
+					if (currentOpCode.isControlCode()) {
+						if (!isFin) {
+							onProtocolError(FRAGMENTED_CONTROL_MESSAGE);
+						} else {
+							processLength();
+						}
+						return;
+					}
+
+					if (waitingForFin) {
+						if (currentOpCode != OP_CONTINUATION) {
+							onProtocolError(WAITING_FOR_LAST_FRAME);
+							return;
+						}
+						waitingForFin = !isFin;
+					} else {
+						if (currentOpCode == OP_CONTINUATION) {
+							onProtocolError(UNEXPECTED_CONTINUATION);
+							return;
+						}
+
+						waitingForFin = !isFin;
 					}
 
 					processLength();
@@ -127,17 +163,17 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 
 		input.parse(SINGLE_BYTE_DECODER)
 				.whenResult(maskAndLen -> {
-					boolean msgMasked = (maskAndLen & FIRST_BIT_MASK) != 0;
+					boolean msgMasked = maskAndLen < 0;
 					if (this.masked && !msgMasked) {
-						closeEx(MASK_REQUIRED);
+						onProtocolError(MASK_REQUIRED);
 					}
 					if (!this.masked && msgMasked) {
-						closeEx(MASK_SHOULD_NOT_BE_PRESENT);
+						onProtocolError(MASK_SHOULD_NOT_BE_PRESENT);
 					}
 					maskIndex = msgMasked ? 0 : -1;
 					byte length = (byte) (maskAndLen & LAST_7_BITS_MASK);
 					if (currentOpCode.isControlCode() && length > 125) {
-						closeEx(INVALID_PAYLOAD_LENGTH);
+						onProtocolError(INVALID_PAYLOAD_LENGTH);
 						return;
 					}
 					if (length == 126) {
@@ -160,7 +196,7 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 					} else {
 						len = lenBuf.readLong();
 						if (len < 0) {
-							closeEx(INVALID_PAYLOAD_LENGTH);
+							onProtocolError(INVALID_PAYLOAD_LENGTH);
 						}
 					}
 					lenBuf.recycle();
@@ -169,6 +205,11 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 	}
 
 	private void processMask(long length) {
+		if (frameQueue.remainingBytes() + length > maxMessageSize) {
+			onProtocolError(MESSAGE_TOO_BIG);
+			return;
+		}
+
 		if (maskIndex == -1) {
 			processPayload(length);
 		} else {
@@ -185,57 +226,58 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 		ByteBuf buf = bufs.takeAtMost(length > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) length);
 		unmask(buf);
 		long newLength = length - buf.readRemaining();
+		if (buf.canRead()) {
+			(currentOpCode.isControlCode() ? controlMessageQueue : frameQueue).add(buf);
+		}
 		if (newLength != 0) {
 			Promise.complete()
-					.then(() -> {
-						if (buf.canRead()) {
-							if (currentOpCode.isControlCode()) {
-								controlMessageQueue.add(buf);
-								return Promise.complete();
-							}
-							return output.accept(buf);
-						}
-						return Promise.complete();
-					})
 					.then(() -> bufs.isEmpty() ? input.needMoreData() : Promise.complete())
 					.whenResult(() -> processPayload(newLength));
 			return;
 		}
 
 		if (currentOpCode.isControlCode()) {
-			controlMessageQueue.add(buf);
 			processControlPayload();
 		} else {
-			output.accept(buf)
-					.whenResult(this::processOpCode);
+			sendDataFrame();
 		}
 	}
 
 	private void processControlPayload() {
 		ByteBuf controlPayload = controlMessageQueue.takeRemaining();
 		if (currentOpCode == OP_CLOSE) {
+			frameQueue.recycle();
 			if (controlPayload.canRead()) {
 				int payloadLength = controlPayload.readRemaining();
 				if (payloadLength < 2 || payloadLength > 125) {
 					onCloseReceived(INVALID_PAYLOAD_LENGTH);
-					closeEx(INVALID_PAYLOAD_LENGTH);
 					return;
 				}
 				int statusCode = Short.toUnsignedInt(controlPayload.readShort());
-				if (statusCode == 1000) {
+				if (isReservedCloseCode(statusCode)) {
+					onProtocolError(INVALID_CLOSE_CODE);
+					return;
+				}
+				String payload;
+				try {
+					payload = getUTF8(controlPayload);
+				} catch (CharacterCodingException e) {
+					onProtocolError(NOT_A_VALID_UTF_8);
+					return;
+				} finally {
 					controlPayload.recycle();
+				}
+				if (statusCode == 1000) {
 					output.acceptEndOfStream()
-							.whenComplete(() -> onCloseReceived(REGULAR_CLOSE))
+							.whenComplete(() -> closeReceivedPromise.trySet(REGULAR_CLOSE))
 							.whenResult(this::completeProcess);
 				} else {
-					WebSocketException exception = new WebSocketException(WebSocketDecoder.class, statusCode, controlPayload.asString(UTF_8));
+					WebSocketException exception = new WebSocketException(WebSocketBufsToFrames.class, statusCode, payload);
 					onCloseReceived(exception);
-					closeEx(exception);
 				}
 			} else {
 				controlPayload.recycle();
 				onCloseReceived(STATUS_CODE_MISSING);
-				closeEx(STATUS_CODE_MISSING);
 			}
 		} else if (currentOpCode == OP_PING) {
 			pingPongHandler.onPing(controlPayload);
@@ -245,6 +287,11 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 			pingPongHandler.onPong(controlPayload);
 			processOpCode();
 		}
+	}
+
+	private void sendDataFrame() {
+		output.accept(new WebSocket.Frame(opToFrameType(currentOpCode), frameQueue.takeRemaining(), isFin))
+				.whenResult(this::processOpCode);
 	}
 
 	private void unmask(ByteBuf buf) {
@@ -258,6 +305,12 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 
 	private void onCloseReceived(WebSocketException e) {
 		closeReceivedPromise.trySet(e);
+		closeEx(e);
+	}
+
+	void onProtocolError(WebSocketException e) {
+		closeReceivedPromise.trySetException(e);
+		closeEx(e);
 	}
 
 	@Override
@@ -265,6 +318,8 @@ final class WebSocketDecoder extends AbstractCommunicatingProcess
 		if (output != null) {
 			output.closeEx(e);
 		}
+		frameQueue.recycle();
+		controlMessageQueue.recycle();
 	}
 
 }

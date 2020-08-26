@@ -106,16 +106,6 @@ public final class HttpRequest extends HttpMessage implements WithInitializer<Ht
 		return request;
 	}
 
-	@Beta
-	@NotNull
-	public static HttpRequest webSocket(WebSocketOptions webSocketOptions, @NotNull String url) {
-		HttpRequest request = webSocket(url);
-		if (webSocketOptions.isTextData()) {
-			request.flags |= WS_DATA_TEXT;
-		}
-		return request;
-	}
-
 	@NotNull
 	public HttpRequest withHeader(@NotNull HttpHeader header, @NotNull String value) {
 		addHeader(header, value);
@@ -207,7 +197,7 @@ public final class HttpRequest extends HttpMessage implements WithInitializer<Ht
 
 	@Deprecated
 	public boolean isHttps() {
-		return url.getProtocol() == HTTPS;
+		return url.isHttps();
 	}
 
 	public Protocol getProtocol() {

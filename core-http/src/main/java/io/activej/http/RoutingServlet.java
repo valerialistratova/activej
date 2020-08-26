@@ -28,10 +28,13 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.function.BiFunction;
 import java.util.function.BinaryOperator;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static io.activej.common.Checks.checkArgument;
 import static io.activej.http.Protocol.WS;
 import static io.activej.http.Protocol.WSS;
+import static io.activej.http.WebSocketAdapter.webSocket;
 
 /**
  * This servlet allows to build complex servlet trees, routing requests between them by the HTTP paths.
@@ -44,8 +47,6 @@ public final class RoutingServlet implements AsyncServlet, WithInitializer<Routi
 	private static final BinaryOperator<AsyncServlet> DEFAULT_MERGER = ($, $2) -> {
 		throw new IllegalArgumentException("Already mapped");
 	};
-	private final WebSocketOptions DEFAULT_WEB_SOCKET_OPTIONS = WebSocketOptions.create();
-
 	protected final Map<MappingKey, AsyncServlet> rootServlets = new HashMap<>();
 
 	protected final Map<String, RoutingServlet> routes = new HashMap<>();
@@ -105,30 +106,29 @@ public final class RoutingServlet implements AsyncServlet, WithInitializer<Routi
 
 	@Beta
 	@Contract("_, _ -> this")
-	public RoutingServlet mapWebSocket(@NotNull String path, @NotNull AsyncServlet servlet) {
-		return mapWebSocket(DEFAULT_WEB_SOCKET_OPTIONS, path, servlet, DEFAULT_MERGER);
+	public RoutingServlet mapWebSocket(@NotNull String path, Consumer<WebSocket> webSocketConsumer) {
+		return mapWebSocket(path, webSocketConsumer, DEFAULT_MERGER);
 	}
 
 	@Beta
 	@Contract("_, _, _ -> this")
-	public RoutingServlet mapWebSocket(@NotNull WebSocketOptions webSocketOptions, @NotNull String path, @NotNull AsyncServlet servlet) {
-		return mapWebSocket(webSocketOptions, path, servlet, DEFAULT_MERGER);
-	}
-
-	@Beta
-	@Contract("_, _, _ -> this")
-	public RoutingServlet mapWebSocket(@NotNull String path, @NotNull AsyncServlet servlet, @NotNull BinaryOperator<AsyncServlet> merger) {
-		return mapWebSocket(DEFAULT_WEB_SOCKET_OPTIONS, path, servlet, merger);
+	public RoutingServlet mapWebSocket(@NotNull String path, Consumer<WebSocket> webSocketConsumer, @NotNull BinaryOperator<AsyncServlet> merger) {
+		return mapWebSocket(path, ($, fn) -> fn.apply(HttpResponse.ofCode(101)).whenResult(webSocketConsumer), merger);
 	}
 
 	/**
 	 * Maps given servlet as a web socket servlet on some path and calls the merger if there is already a servlet there.
 	 */
 	@Beta
-	@Contract("_, _, _, _ -> this")
-	public RoutingServlet mapWebSocket(@NotNull WebSocketOptions webSocketOptions, @NotNull String path, @NotNull AsyncServlet servlet, @NotNull BinaryOperator<AsyncServlet> merger) {
-		servlet = WebSocketDecorator.webSocket(webSocketOptions, servlet);
-		return doMap(new MappingKey(), path, servlet, merger);
+	@Contract("_, _ -> this")
+	public RoutingServlet mapWebSocket(@NotNull String path, @NotNull AsyncWebSocketServlet servlet) {
+		return mapWebSocket(path, servlet, DEFAULT_MERGER);
+	}
+
+	@Beta
+	@Contract("_, _, _ -> this")
+	public RoutingServlet mapWebSocket(@NotNull String path, @NotNull AsyncWebSocketServlet servlet, @NotNull BinaryOperator<AsyncServlet> merger) {
+		return doMap(new MappingKey(), path, webSocket(servlet), merger);
 	}
 
 	@Contract("_, _, _, _ -> this")
@@ -347,6 +347,10 @@ public final class RoutingServlet implements AsyncServlet, WithInitializer<Routi
 			result = 31 * result + (isWebSocket ? 1 : 0);
 			return result;
 		}
+	}
+
+	public interface AsyncWebSocketServlet {
+		void serve(HttpRequest request, Function<HttpResponse, Promise<WebSocket>> fn);
 	}
 
 	@FunctionalInterface

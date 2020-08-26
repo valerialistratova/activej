@@ -27,4 +27,6 @@ import io.activej.promise.Promise;
  */
 public interface IAsyncHttpClient {
 	Promise<HttpResponse> request(HttpRequest request);
+
+	Promise<WebSocket> webSocketRequest(HttpRequest request);
 }

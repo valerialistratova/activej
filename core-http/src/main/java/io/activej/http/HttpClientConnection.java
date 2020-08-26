@@ -17,6 +17,7 @@
 package io.activej.http;
 
 import io.activej.bytebuf.ByteBuf;
+import io.activej.common.exception.StacklessException;
 import io.activej.common.exception.parse.ParseException;
 import io.activej.common.exception.parse.UnknownFormatException;
 import io.activej.csp.ChannelSupplier;
@@ -38,10 +39,8 @@ import static io.activej.bytebuf.ByteBufStrings.decodePositiveInt;
 import static io.activej.csp.ChannelSuppliers.concat;
 import static io.activej.http.HttpHeaders.*;
 import static io.activej.http.HttpMessage.MUST_LOAD_BODY;
-import static io.activej.http.HttpMessage.WS_DATA_TEXT;
-import static io.activej.http.HttpUtils.*;
-import static io.activej.http.Protocol.WS;
-import static io.activej.http.Protocol.WSS;
+import static io.activej.http.HttpUtils.generateWebSocketKey;
+import static io.activej.http.HttpUtils.isAnswerInvalid;
 import static io.activej.http.WebSocketConstants.HANDSHAKE_FAILED;
 import static io.activej.http.WebSocketConstants.REGULAR_CLOSE;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
@@ -92,6 +91,7 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
 final class HttpClientConnection extends AbstractHttpConnection {
 	public static final ParseException INVALID_RESPONSE = new UnknownFormatException(HttpClientConnection.class, "Invalid response");
 	public static final ParseException CONNECTION_CLOSED = new ParseException(HttpClientConnection.class, "Connection closed");
+	public static final StacklessException NOT_ACCEPTED_RESPONSE = new StacklessException(HttpClientConnection.class, "Response was not accepted");
 
 	@Nullable
 	private SettablePromise<HttpResponse> promise;
@@ -105,6 +105,7 @@ final class HttpClientConnection extends AbstractHttpConnection {
 	@Nullable HttpClientConnection addressPrev;
 	HttpClientConnection addressNext;
 	final int maxBodySize;
+	final int maxWebSocketMessageSize;
 
 	HttpClientConnection(Eventloop eventloop, AsyncHttpClient client,
 			AsyncTcpSocket asyncTcpSocket, InetSocketAddress remoteAddress) {
@@ -112,6 +113,7 @@ final class HttpClientConnection extends AbstractHttpConnection {
 		this.remoteAddress = remoteAddress;
 		this.client = client;
 		this.maxBodySize = client.maxBodySize;
+		this.maxWebSocketMessageSize = client.maxWebSocketMessageSize;
 		this.inspector = client.inspector;
 	}
 
@@ -240,7 +242,12 @@ final class HttpClientConnection extends AbstractHttpConnection {
 	}
 
 	@NotNull
-	private Promise<HttpResponse> sendWebSocketRequest(HttpRequest request, Promise<HttpResponse> promise) {
+	public Promise<WebSocket> sendWebSocketRequest(HttpRequest request) {
+		assert !isClosed();
+		SettablePromise<HttpResponse> promise = new SettablePromise<>();
+		this.promise = promise;
+		(pool = client.poolReadWrite).addLastNode(this);
+		poolTimestamp = eventloop.currentTimeMillis();
 		flags |= WEB_SOCKET;
 		flags |= UPGRADE;
 		request.addHeader(CONNECTION, CONNECTION_UPGRADE_HEADER);
@@ -250,12 +257,9 @@ final class HttpClientConnection extends AbstractHttpConnection {
 		byte[] encodedKey = generateWebSocketKey();
 		request.addHeader(SEC_WEBSOCKET_KEY, encodedKey);
 
-		WebSocketEncoder encoder = WebSocketEncoder.create(true);
-		SettablePromise<Void> successfulUpgrade = new SettablePromise<>();
 
-		ChannelSupplier<ByteBuf> rawStream = doGetBodyStream(request);
-		request.setBodyStream(ChannelSupplier.ofPromise(successfulUpgrade
-				.map($ -> rawStream.transformWith(encoder))));
+		ChannelZeroBuffer<ByteBuf> buffer = new ChannelZeroBuffer<>();
+		request.setBodyStream(buffer.getSupplier());
 
 		writeHttpMessageAsStream(request);
 		request.recycle();
@@ -270,10 +274,8 @@ final class HttpClientConnection extends AbstractHttpConnection {
 						closeWithError(HANDSHAKE_FAILED);
 						return Promise.ofException(HANDSHAKE_FAILED);
 					}
-
-					encoder.useTextEncoding((res.flags & WS_DATA_TEXT) != 0);
-
-					WebSocketDecoder decoder = WebSocketDecoder.create(encoder, false);
+					WebSocketFramesToBufs encoder = WebSocketFramesToBufs.create(true);
+					WebSocketBufsToFrames decoder = WebSocketBufsToFrames.create(maxWebSocketMessageSize, encoder, false);
 					encoder.getCloseSentPromise()
 							.then(decoder::getCloseReceivedPromise)
 							.whenException(this::closeWebSocketConnection)
@@ -289,11 +291,16 @@ final class HttpClientConnection extends AbstractHttpConnection {
 									encoder.closeEx(e);
 								}
 							});
-
-					return Promise.of(res.withBodyStream(res.getBodyStream().transformWith(decoder)));
+					return Promise.of((WebSocket) new WebSocketImpl(
+							request,
+							res,
+							res.getBodyStream().transformWith(decoder),
+							buffer.getConsumer().transformWith(encoder),
+							decoder::onProtocolError,
+							maxWebSocketMessageSize
+					));
 				})
-				.whenResult(() -> successfulUpgrade.set(null))
-				.whenException(rawStream::closeEx);
+				.whenException(this::closeWithError);
 	}
 
 	private void readHttpResponse() {
@@ -350,9 +357,6 @@ final class HttpClientConnection extends AbstractHttpConnection {
 		this.promise = promise;
 		(pool = client.poolReadWrite).addLastNode(this);
 		poolTimestamp = eventloop.currentTimeMillis();
-		if (request.getProtocol() == WS || request.getProtocol() == WSS) {
-			return sendWebSocketRequest(request, promise);
-		}
 		HttpHeaderValue connectionHeader = CONNECTION_KEEP_ALIVE_HEADER;
 		if (client.keepAliveTimeoutMillis == 0 ||
 				client.maxKeepAliveRequests != 0 && ++numberOfKeepAliveRequests >= client.maxKeepAliveRequests) {

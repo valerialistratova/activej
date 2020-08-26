@@ -61,17 +61,12 @@ public abstract class HttpMessage {
 	static final byte USE_GZIP = 1 << 1;
 
 	/**
-	 * This flag means that the web socket payload data will be sent as a TEXT data.
-	 * If not set, data will be sent as a BINARY data
-	 */
-	static final byte WS_DATA_TEXT = 1 << 2;
-	/**
 	 * This flag means that the body was already recycled and is not accessible.
 	 * It is mostly used in assertions.
 	 */
 	static final byte RECYCLED = (byte) (1 << 7);
 
-	@MagicConstant(flags = {MUST_LOAD_BODY, USE_GZIP, WS_DATA_TEXT, RECYCLED})
+	@MagicConstant(flags = {MUST_LOAD_BODY, USE_GZIP, RECYCLED})
 	byte flags;
 
 	final HttpHeadersMultimap<HttpHeader, HttpHeaderValue> headers = new HttpHeadersMultimap<>();

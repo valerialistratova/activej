@@ -22,6 +22,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import static io.activej.common.Checks.checkArgument;
+import static io.activej.http.HttpUtils.isReservedCloseCode;
 
 @Beta
 public final class WebSocketException extends StacklessException {
@@ -52,8 +53,8 @@ public final class WebSocketException extends StacklessException {
 		return super.getMessage();
 	}
 
-	public boolean canBeEchoed() {
-		return code == null || code < 1004 || code >= 1007 && code != 1015;
+	boolean canBeEchoed() {
+		return code == null || !isReservedCloseCode(code);
 	}
 
 	@Override
