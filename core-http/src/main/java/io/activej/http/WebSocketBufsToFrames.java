@@ -34,6 +34,7 @@ import io.activej.promise.SettablePromise;
 import java.nio.charset.CharacterCodingException;
 
 import static io.activej.common.Checks.checkState;
+import static io.activej.csp.binary.BinaryChannelSupplier.UNEXPECTED_END_OF_STREAM_EXCEPTION;
 import static io.activej.csp.binary.ByteBufsDecoder.ofFixedSize;
 import static io.activej.http.HttpUtils.*;
 import static io.activej.http.WebSocketConstants.*;
@@ -313,7 +314,7 @@ final class WebSocketBufsToFrames extends AbstractCommunicatingProcess
 	@Override
 	protected void doClose(Throwable e) {
 		if (output != null) {
-			output.closeEx(e);
+			output.closeEx(e == UNEXPECTED_END_OF_STREAM_EXCEPTION ? CLOSE_FRAME_MISSING : e);
 		}
 		frameQueue.recycle();
 		controlMessageQueue.recycle();

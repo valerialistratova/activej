@@ -20,6 +20,7 @@ import io.activej.async.service.EventloopService;
 import io.activej.common.ApplicationSettings;
 import io.activej.common.Checks;
 import io.activej.common.MemSize;
+import io.activej.common.annotation.Beta;
 import io.activej.common.inspector.AbstractInspector;
 import io.activej.common.inspector.BaseInspector;
 import io.activej.dns.AsyncDnsClient;
@@ -390,6 +391,19 @@ public final class AsyncHttpClient implements IAsyncHttpClient, EventloopService
 		return doRequest(request, connection-> connection.send(request));
 	}
 
+	/**
+	 * Sends a web socket request and returns a promise of a web socket.
+	 * <p>
+	 * Sent request must be constructed via {@link HttpRequest#webSocket(String)} method
+	 * and must not have a body or body stream.
+	 * <p>
+	 * After receiving a {@link WebSocket}, caller can inspect server response via calling {@link WebSocket#getResponse()}.
+	 * If a response does not satisfy a caller, it may close the web socket with an appropriate exception.
+	 *
+	 * @param request web socket request
+	 * @return promise of a web socket
+	 */
+	@Beta
 	@Override
 	public Promise<WebSocket> webSocketRequest(HttpRequest request) {
 		checkArgument(request.getProtocol() == WS || request.getProtocol() == WSS, "Wrong protocol");

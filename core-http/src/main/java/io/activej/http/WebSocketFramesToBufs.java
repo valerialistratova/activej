@@ -19,6 +19,7 @@ package io.activej.http;
 import io.activej.bytebuf.ByteBuf;
 import io.activej.bytebuf.ByteBufPool;
 import io.activej.bytebuf.ByteBufStrings;
+import io.activej.common.Checks;
 import io.activej.common.annotation.Beta;
 import io.activej.csp.ChannelConsumer;
 import io.activej.csp.ChannelInput;
@@ -27,6 +28,7 @@ import io.activej.csp.ChannelSupplier;
 import io.activej.csp.dsl.WithChannelTransformer;
 import io.activej.csp.process.AbstractCommunicatingProcess;
 import io.activej.http.WebSocket.Frame;
+import io.activej.http.WebSocket.Frame.FrameType;
 import io.activej.http.WebSocketConstants.*;
 import io.activej.promise.Promise;
 import io.activej.promise.SettablePromise;
@@ -36,6 +38,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 import static io.activej.common.Checks.checkState;
 import static io.activej.http.HttpUtils.frameToOpType;
+import static io.activej.http.WebSocket.Frame.FrameType.*;
 import static io.activej.http.WebSocketConstants.*;
 import static io.activej.http.WebSocketConstants.OpCode.OP_CLOSE;
 import static io.activej.http.WebSocketConstants.OpCode.OP_PONG;
@@ -43,6 +46,8 @@ import static io.activej.http.WebSocketConstants.OpCode.OP_PONG;
 @Beta
 final class WebSocketFramesToBufs extends AbstractCommunicatingProcess
 		implements WithChannelTransformer<WebSocketFramesToBufs, Frame, ByteBuf>, PingPongHandler {
+	private static final Boolean CHECK = Checks.isEnabled(WebSocketFramesToBufs.class);
+
 	private static final ThreadLocalRandom RANDOM = ThreadLocalRandom.current();
 
 	private final boolean masked;
@@ -54,6 +59,7 @@ final class WebSocketFramesToBufs extends AbstractCommunicatingProcess
 	@Nullable
 	private Promise<Void> pendingPromise;
 	private boolean closing;
+	private boolean waitingForFin;
 
 	// region creators
 	private WebSocketFramesToBufs(boolean masked) {
@@ -94,7 +100,12 @@ final class WebSocketFramesToBufs extends AbstractCommunicatingProcess
 
 	@Override
 	protected void doProcess() {
-		input.streamTo(ChannelConsumer.of(frame -> doAccept(encodeData(frame))))
+		input.streamTo(ChannelConsumer.of(
+				frame -> {
+					if (CHECK) checkFrameOrder(frame);
+
+					return doAccept(encodeData(frame));
+				}))
 				.then(() -> sendCloseFrame(REGULAR_CLOSE))
 				.whenResult(this::completeProcess);
 	}
@@ -167,9 +178,9 @@ final class WebSocketFramesToBufs extends AbstractCommunicatingProcess
 	}
 
 	private Promise<Void> doAccept(@Nullable ByteBuf buf) {
-		if (closeSentPromise.isComplete()){
+		if (closeSentPromise.isComplete()) {
 			if (buf != null) buf.recycle();
-			return Promise.ofException(WebSocketConstants.CLOSE_EXCEPTION);
+			return Promise.ofException(CLOSE_EXCEPTION);
 		}
 		if (pendingPromise == null) {
 			return pendingPromise = output.accept(buf);
@@ -188,6 +199,17 @@ final class WebSocketFramesToBufs extends AbstractCommunicatingProcess
 				.whenComplete(() -> closeSentPromise.trySet(null));
 	}
 
+	private void checkFrameOrder(Frame frame) {
+		FrameType type = frame.getType();
+		if (!waitingForFin) {
+			checkState(type == TEXT || type == BINARY);
+			if (!frame.isLastFrame()) waitingForFin = true;
+		} else {
+			checkState(type == CONTINUATION);
+			if (frame.isLastFrame()) waitingForFin = false;
+		}
+	}
+
 	@Override
 	protected void doClose(Throwable e) {
 		if (output == null || input == null) return;
@@ -200,10 +222,12 @@ final class WebSocketFramesToBufs extends AbstractCommunicatingProcess
 			} else {
 				Integer code = wsEx.getCode();
 				assert code != null;
-				exception = code == 1005 ? EMPTY_CLOSE : WebSocketConstants.CLOSE_EXCEPTION;
+				exception = code == 1005 ?
+						EMPTY_CLOSE :
+						masked ? GOING_AWAY : SERVER_ERROR;
 			}
 		} else {
-			exception = WebSocketConstants.CLOSE_EXCEPTION;
+			exception = masked ? GOING_AWAY : SERVER_ERROR;
 		}
 		sendCloseFrame(exception);
 	}
